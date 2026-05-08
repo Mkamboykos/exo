@@ -53,29 +53,32 @@ impl PyPidfileError {
 /// [`daemon`(3)]: https://linux.die.net/man/3/daemon
 #[gen_stub_pyclass]
 #[pyclass(name = "Pidfile")]
-pub struct PyPidfile(Pidfile);
+pub struct PyPidfile(#[allow(unused)] Pidfile);
 
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyPidfile {
     /// Creates a new PID file and locks it.
+    /// Writes the current process ID to the PID file.
     ///
     /// If the PID file cannot be locked, returns `PidfileError::AlreadyRunning` with
     /// a PID of the already running process, or `None` if no PID has been written to
     /// the PID file yet.
     #[new]
     fn py_new(py: Python, path: PathBuf, mode: u32) -> PyResult<Self> {
-        Ok(Self(
-            Pidfile::new(&path, Permissions::from_mode(mode))
-                .map_err(|e| PyPidfileError(e).into_pyerr(py))?,
-        ))
-    }
-
-    /// Writes the current process ID to the PID file.
-    ///
-    /// The file is truncated before writing.
-    fn write<'py>(&mut self, py: Python<'py>) -> PyResult<()> {
-        self.0.write().map_err(|e| PyPidfileError(e).into_pyerr(py))
+        if !path.exists() {
+            let parent = path.parent().expect("pidfile at root? you monster");
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = Pidfile::new(&path, Permissions::from_mode(mode)).map_err(|e| match e {
+            PidfileError::AlreadyRunning { .. } => PyPidfileError(e).into_pyerr(py),
+            PidfileError::Io(io_err) => io_err.into(),
+        })?;
+        file.write().map_err(|e| match e {
+            PidfileError::AlreadyRunning { .. } => PyPidfileError(e).into_pyerr(py),
+            PidfileError::Io(io_err) => io_err.into(),
+        })?;
+        Ok(Self(file))
     }
 }
 

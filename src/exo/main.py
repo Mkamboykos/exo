@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Self
 
 import anyio
+from exo_net import Pidfile, PidfileError
 from loguru import logger
 from pydantic import PositiveInt
 
@@ -17,14 +18,13 @@ from exo.download.coordinator import DownloadCoordinator
 from exo.download.impl_shard_downloader import exo_shard_downloader
 from exo.master.main import Master
 from exo.routing.event_router import EventRouter
-from exo.routing.router import Router, get_node_id_keypair
-from exo.shared.constants import EXO_DEFAULT_MODELS_DIR, EXO_LOG
+from exo.shared.constants import EXO_DEFAULT_MODELS_DIR, EXO_LOG, EXO_PID_FILE
+from exo.routing.router import Router
 from exo.shared.election import Election, ElectionResult
 from exo.shared.logging import logger_cleanup, logger_setup
 from exo.shared.types.common import NodeId, SessionId
 from exo.utils.channels import Receiver, channel
 from exo.utils.daemon import detach_stdio_to_devnull
-from exo.utils.pidfile import PidfileLockError, acquire_exo_pidfile
 from exo.utils.pydantic_ext import FrozenModel
 from exo.utils.task_group import TaskGroup
 from exo.worker.main import Worker
@@ -48,8 +48,8 @@ class Node:
 
     @classmethod
     async def create(cls, args: "Args") -> Self:
-        keypair = get_node_id_keypair()
-        node_id = NodeId(keypair.to_node_id())
+        keypair = os.urandom(16)
+        node_id = NodeId(keypair.hex())
         session_id = SessionId(master_node_id=node_id, election_clock=0)
         router = Router.create(
             keypair,
@@ -272,8 +272,8 @@ class Node:
 def main():
     # Exit early if no PID file (not compatible with double-for daemonization yet)
     try:
-        pidfile = acquire_exo_pidfile()
-    except PidfileLockError as exception:
+        pidfile = Pidfile(EXO_PID_FILE, 0o0600)
+    except PidfileError as exception:
         print(exception, file=sys.stderr)
         raise SystemExit(1) from exception
 
