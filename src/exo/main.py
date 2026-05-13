@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Self
 
 import anyio
-from exo_net import Pidfile, PidfileError
+from exo_rs import Pidfile, PidfileError
 from loguru import logger
 from pydantic import PositiveInt
 
