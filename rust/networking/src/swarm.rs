@@ -146,11 +146,15 @@ fn filter_swarm_event(event: SwarmEvent<BehaviourEvent>) -> Option<FromSwarm> {
 ///
 /// - `listen_port`: TCP port to listen on. `0` lets the OS assign one.
 /// - `bootstrap_peers`: multiaddrs to dial for environments without mDNS.
+/// - `listen_address`: IPv4 address to bind to. `None` or empty binds to all interfaces (`0.0.0.0`).
+///   Set this to a specific interface IP (e.g. a Thunderbolt Bridge address) to restrict traffic
+///   to that interface.
 pub fn create_swarm(
     keypair: identity::Keypair,
     from_client: mpsc::Receiver<ToSwarm>,
     bootstrap_peers: Vec<String>,
     listen_port: u16,
+    listen_address: Option<String>,
 ) -> alias::AnyResult<Swarm> {
     let parsed_bootstrap_peers: Vec<libp2p::Multiaddr> = bootstrap_peers
         .iter()
@@ -164,7 +168,11 @@ pub fn create_swarm(
         .with_behaviour(|keypair| Behaviour::new(keypair, parsed_bootstrap_peers))?
         .build();
 
-    swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{listen_port}").parse()?)?;
+    let bind_addr = listen_address
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("0.0.0.0");
+    swarm.listen_on(format!("/ip4/{bind_addr}/tcp/{listen_port}").parse()?)?;
     Ok(Swarm { swarm, from_client })
 }
 

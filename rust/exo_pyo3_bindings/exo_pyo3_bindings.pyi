@@ -44,7 +44,7 @@ class MessageTooLargeError(builtins.Exception):
 
 @typing.final
 class NetworkingHandle:
-    def __new__(cls, identity: Keypair, bootstrap_peers: typing.Sequence[builtins.str], listen_port: builtins.int) -> NetworkingHandle: ...
+    def __new__(cls, identity: Keypair, bootstrap_peers: typing.Sequence[builtins.str], listen_port: builtins.int, listen_address: typing.Optional[builtins.str] = ...) -> NetworkingHandle: ...
     async def gossipsub_subscribe(self, topic: builtins.str) -> builtins.bool:
         r"""
         Subscribe to a `GossipSub` topic.
