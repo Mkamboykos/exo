@@ -274,9 +274,19 @@ _THUNDERBOLT_BRIDGE_IFACE = "bridge0"
 _THUNDERBOLT_AUTO_PORT = 50001
 
 
+def _is_link_local(ip: str) -> bool:
+    """Return True if the address is an IPv4 link-local address (169.254.x.x)."""
+    return ip.startswith("169.254.")
+
+
 def _detect_thunderbolt_bridge_ip() -> str | None:
-    """Return the IPv4 address of the Thunderbolt Bridge (bridge0) if the interface is up
-    and has at least one peer connected (i.e. the cable is plugged in)."""
+    """Return the IPv4 address of the Thunderbolt Bridge (bridge0) if the interface is up.
+
+    Accepts both static IPs and macOS self-assigned link-local addresses (169.254.x.x),
+    which macOS assigns automatically when a Thunderbolt cable is connected and no DHCP
+    server is present (RFC 3927 IPv4LL). Returns None if the interface does not exist,
+    is down, or has no usable IPv4 address yet.
+    """
     import socket
 
     import psutil
@@ -293,6 +303,33 @@ def _detect_thunderbolt_bridge_ip() -> str | None:
         if addr.family == socket.AF_INET and not addr.address.startswith("127."):
             return addr.address
     return None
+
+
+def _detect_thunderbolt_peer_ips() -> list[str]:
+    """Return IPv4 addresses of peers discovered via ARP on the Thunderbolt Bridge (bridge0)."""
+    import re
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["arp", "-a", "-i", _THUNDERBOLT_BRIDGE_IFACE],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+    # Each line: hostname (1.2.3.4) at aa:bb:cc:dd:ee:ff on bridge0 [ethernet]
+    peers: list[str] = []
+    for line in result.stdout.splitlines():
+        match = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", line)
+        if match:
+            ip = match.group(1)
+            # Skip multicast and broadcast addresses.
+            if not ip.startswith("239.") and not ip.endswith(".255"):
+                peers.append(ip)
+    return peers
 
 
 def main():
@@ -322,7 +359,17 @@ def main():
     logger.info(f"EXO_LIBP2P_NAMESPACE: {os.getenv('EXO_LIBP2P_NAMESPACE')}")
 
     if args.listen_address:
-        logger.info(f"Binding libp2p to {args.listen_address}:{args.libp2p_port} (Thunderbolt Bridge auto-detected)")
+        ip_kind = "link-local" if _is_link_local(args.listen_address) else "static"
+        logger.info(
+            f"Binding libp2p to {args.listen_address}:{args.libp2p_port} "
+            f"(Thunderbolt Bridge auto-detected, {ip_kind} IP)"
+        )
+        if args.bootstrap_peers:
+            logger.info(f"Thunderbolt peers auto-discovered via ARP: {args.bootstrap_peers}")
+        elif _is_link_local(args.listen_address):
+            logger.info(
+                "No ARP peers found yet — mDNS discovery will connect peers once both nodes are running."
+            )
 
     if args.offline:
         logger.info("Running in OFFLINE mode — no internet checks, local models only")
@@ -456,6 +503,13 @@ class Args(FrozenModel):
             dest="listen_address",
             help="IPv4 address for libp2p to bind to (env: EXO_LISTEN_ADDRESS). Defaults to all interfaces. Set to your Thunderbolt Bridge IP to route traffic through a direct cable connection.",
         )
+        parser.add_argument(
+            "--tb-only",
+            action="store_true",
+            dest="tb_only",
+            help="Require a Thunderbolt Bridge (bridge0) to be present and exit if one is not detected. "
+                 "Useful when deploying to machines that should only communicate over a direct cable connection.",
+        )
         fast_synch_group = parser.add_mutually_exclusive_group()
         fast_synch_group.add_argument(
             "--fast-synch",
@@ -481,5 +535,18 @@ class Args(FrozenModel):
                 # Use a fixed port so peers can reliably bootstrap to us.
                 if raw.get("libp2p_port", 0) == 0:
                     raw["libp2p_port"] = _THUNDERBOLT_AUTO_PORT
+                # Auto-add ARP-discovered peers as bootstrap peers if none are configured.
+                if not raw.get("bootstrap_peers"):
+                    peer_ips = _detect_thunderbolt_peer_ips()
+                    if peer_ips:
+                        raw["bootstrap_peers"] = [
+                            f"/ip4/{ip}/tcp/{_THUNDERBOLT_AUTO_PORT}" for ip in peer_ips
+                        ]
+            elif raw.get("tb_only"):
+                parser.error(
+                    f"--tb-only specified but no Thunderbolt Bridge ({_THUNDERBOLT_BRIDGE_IFACE}) "
+                    "was detected. Ensure a Thunderbolt cable is connected and that the bridge "
+                    "interface has an IP address (run ./scripts/setup_thunderbolt.sh if needed)."
+                )
 
         return cls(**raw)  # pyright: ignore[reportAny] - We are intentionally validating here, we can't do it statically
