@@ -41,20 +41,50 @@ fi
 # directly to the active Thunderbolt interface (en1/en2/en3) sidesteps this.
 echo "→ Detecting active Thunderbolt interface ..."
 TB_IFACE=""
+
+# First: check bridge0 members (explicit Thunderbolt Bridge setup)
 for member in $(ifconfig bridge0 2>/dev/null | awk '/member:/{print $2}'); do
   if ifconfig "$member" 2>/dev/null | grep -q "status: active"; then
     TB_IFACE="$member"
     break
   fi
 done
-# Fallback: check common names directly if bridge0 has no members yet
+
+# Second: use networksetup to find hardware-identified Thunderbolt interfaces.
+# This correctly excludes WiFi which shares the same en* naming scheme.
 if [[ -z "$TB_IFACE" ]]; then
-  for iface in en1 en2 en3; do
-    if ifconfig "$iface" 2>/dev/null | grep -q "status: active"; then
-      TB_IFACE="$iface"
-      break
+  current_port=""
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"  # trim leading whitespace
+    if [[ "$line" == Hardware\ Port:* ]]; then
+      current_port="${line#Hardware Port: }"
+    elif [[ "$line" == Device:* && "$current_port" == *Thunderbolt* ]]; then
+      dev="${line#Device: }"
+      if [[ -n "$dev" ]] && ifconfig "$dev" 2>/dev/null | grep -q "status: active"; then
+        TB_IFACE="$dev"
+        break
+      fi
     fi
-  done
+  done < <(networksetup -listallhardwareports 2>/dev/null)
+fi
+
+# Fallback: check ONLY the interfaces listed as "Thunderbolt N" by networksetup.
+# Do NOT scan all en1-en5 — that would pick up USB Ethernet adapters (en4/en5)
+# that happen to be active.
+if [[ -z "$TB_IFACE" ]]; then
+  current_port=""
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"  # trim leading whitespace
+    if [[ "$line" == Hardware\ Port:* ]]; then
+      current_port="${line#Hardware Port: }"
+    elif [[ "$line" == Device:* && "$current_port" =~ ^Thunderbolt[[:space:]][0-9]+$ ]]; then
+      dev="${line#Device: }"
+      if [[ -n "$dev" ]] && ifconfig "$dev" 2>/dev/null | grep -q "status: active"; then
+        TB_IFACE="$dev"
+        break
+      fi
+    fi
+  done < <(networksetup -listallhardwareports 2>/dev/null)
 fi
 if [[ -z "$TB_IFACE" ]]; then
   echo "  ✗ No active Thunderbolt interface found. Is the cable connected?"
@@ -78,19 +108,39 @@ if [[ "$TB_IFACE" != "bridge0" ]]; then
   done
 fi
 
-# --- 3. Assign static IP to the Thunderbolt interface ---
+# --- 3. Clean up stale 10.100.x.x IPs on all Thunderbolt interfaces ---
+# Previous runs may have left stale aliases on inactive TB ports, causing routing
+# confusion (multiple interfaces claiming the same subnet).
+current_port=""
+while IFS= read -r line; do
+  line="${line#"${line%%[![:space:]]*}"}"
+  if [[ "$line" == Hardware\ Port:* ]]; then
+    current_port="${line#Hardware Port: }"
+  elif [[ "$line" == Device:* && "$current_port" =~ Thunderbolt ]]; then
+    dev="${line#Device: }"
+    [[ -z "$dev" || "$dev" == "$TB_IFACE" ]] && continue
+    for stale_ip in "${MAC_A_IP}" "${MAC_B_IP}"; do
+      if ifconfig "$dev" 2>/dev/null | grep -q "inet ${stale_ip}"; then
+        echo "  → Removing stale ${stale_ip} from ${dev} ..."
+        sudo ifconfig "$dev" -alias "${stale_ip}" 2>/dev/null || true
+      fi
+    done
+  fi
+done < <(networksetup -listallhardwareports 2>/dev/null)
+
+# --- 4. Assign static IP to the Thunderbolt interface ---
 echo "→ Assigning ${MY_IP} to ${TB_IFACE} ..."
 sudo ifconfig "${TB_IFACE}" "${MY_IP}" netmask "${NETMASK}" up
 
-# --- 4. Flush stale ARP/route entries for the peer ---
+# --- 5. Flush stale ARP/route entries for the peer ---
 sudo route delete -host "${PEER_IP}" 2>/dev/null || true
 sudo arp -d "${PEER_IP}" 2>/dev/null || true
 
-# --- 5. Verify the interface is up ---
+# --- 6. Verify the interface is up ---
 echo "→ ${TB_IFACE} status:"
 ifconfig "${TB_IFACE}" | grep -E "inet |status"
 
-# --- 6. Test reachability (optional, non-fatal) ---
+# --- 7. Test reachability (optional, non-fatal) ---
 echo "→ Pinging peer ${PEER_IP} (3 packets) ..."
 if ping -c 3 -t 3 "${PEER_IP}" &>/dev/null; then
   echo "  ✓ Peer is reachable at ${PEER_IP}"
