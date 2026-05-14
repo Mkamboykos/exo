@@ -270,6 +270,23 @@ impl PyNetworkingHandle {
             .map_err(|_| PyErr::receiver_channel_closed())
     }
 
+    /// Dials a specific multiaddr (fire-and-forget).
+    ///
+    /// Useful for manually connecting to a peer whose address is known (e.g., discovered
+    /// via out-of-band ARP lookup on a Thunderbolt Bridge network). Errors such as
+    /// "already connected" are silently ignored by the swarm.
+    #[gen_stub(skip)]
+    fn dial_address<'py>(&self, py: Python<'py>, addr: String) -> PyResult<Bound<'py, PyAny>> {
+        let to_swarm = self.to_swarm.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            to_swarm
+                .send(ToSwarm::Dial { addr })
+                .await
+                .map_err(|_| PyErr::receiver_channel_closed())?;
+            Ok(())
+        })
+    }
+
     /// Publishes a message with multiple topics to the `GossipSub` network.
     ///
     /// If no peers are found that subscribe to this topic, throws `NoPeersSubscribedToTopicError` exception.

@@ -63,6 +63,14 @@ class NetworkingHandle:
         
         If no peers are found that subscribe to this topic, throws `NoPeersSubscribedToTopicError` exception.
         """
+    async def dial_address(self, addr: builtins.str) -> None:
+        r"""
+        Dials a specific multiaddr (fire-and-forget).
+
+        Useful for manually connecting to a peer whose address is known (e.g., discovered
+        via out-of-band ARP lookup on a Thunderbolt Bridge network). Errors such as
+        "already connected" are silently ignored by the swarm.
+        """
     async def recv(self) -> PyFromSwarm: ...
 
 @typing.final

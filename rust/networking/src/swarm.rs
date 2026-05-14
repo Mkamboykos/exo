@@ -33,6 +33,8 @@ pub enum ToSwarm {
         data: Vec<u8>,
         result_sender: oneshot::Sender<Result<gossipsub::MessageId, gossipsub::PublishError>>,
     },
+    /// Dial an arbitrary multiaddr (fire-and-forget; errors are silently ignored).
+    Dial { addr: String },
 }
 pub enum FromSwarm {
     Message {
@@ -111,6 +113,13 @@ fn on_message(swarm: &mut libp2p::Swarm<Behaviour>, message: ToSwarm) {
                 .gossipsub
                 .publish(gossipsub::IdentTopic::new(topic), data);
             _ = result_sender.send(result);
+        }
+        ToSwarm::Dial { addr } => {
+            use libp2p::swarm::dial_opts::DialOpts;
+            if let Ok(multiaddr) = addr.parse::<libp2p::Multiaddr>() {
+                // Errors (e.g. already connected) are intentionally ignored
+                let _ = swarm.dial(DialOpts::unknown_peer_id().address(multiaddr).build());
+            }
         }
     }
 }
