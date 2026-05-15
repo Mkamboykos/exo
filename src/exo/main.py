@@ -311,20 +311,8 @@ def _detect_thunderbolt_bridge_ip() -> str | None:
     return None
 
 
-def _is_multicast(ip: str) -> bool:
-    """Return True for any IPv4 multicast address (224.0.0.0/4, i.e. first octet 224-239)."""
-    try:
-        return 224 <= int(ip.split(".")[0]) <= 239
-    except (ValueError, IndexError):
-        return False
-
-
-def _detect_thunderbolt_peer_ips(local_ip: str) -> list[str]:
-    """Return IPv4 addresses of peers discovered via ARP on the Thunderbolt Bridge (bridge0).
-
-    Filters out the local interface IP, multicast addresses (224-239.x.x.x),
-    broadcast addresses (x.x.x.255), and link-local addresses (169.254.x.x).
-    """
+def _detect_thunderbolt_peer_ips() -> list[str]:
+    """Return IPv4 addresses of peers discovered via ARP on the Thunderbolt Bridge (bridge0)."""
     import re
     import subprocess
 
@@ -344,12 +332,8 @@ def _detect_thunderbolt_peer_ips(local_ip: str) -> list[str]:
         match = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", line)
         if match:
             ip = match.group(1)
-            if (
-                ip != local_ip
-                and not _is_multicast(ip)
-                and not ip.endswith(".255")
-                and not _is_link_local(ip)
-            ):
+            # Skip multicast and broadcast addresses.
+            if not ip.startswith("239.") and not ip.endswith(".255"):
                 peers.append(ip)
     return peers
 
@@ -554,7 +538,7 @@ class Args(FrozenModel):
                     raw["libp2p_port"] = _THUNDERBOLT_AUTO_PORT
                 # Auto-add ARP-discovered peers as bootstrap peers if none are configured.
                 if not raw.get("bootstrap_peers"):
-                    peer_ips = _detect_thunderbolt_peer_ips(tb_ip)
+                    peer_ips = _detect_thunderbolt_peer_ips()
                     if peer_ips:
                         raw["bootstrap_peers"] = [
                             f"/ip4/{ip}/tcp/{_THUNDERBOLT_AUTO_PORT}" for ip in peer_ips
