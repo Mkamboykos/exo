@@ -55,7 +55,6 @@ class Node:
             keypair,
             bootstrap_peers=args.bootstrap_peers,
             listen_port=args.libp2p_port,
-            listen_address=args.listen_address,
         )
         await router.register_topic(topics.GLOBAL_EVENTS)
         await router.register_topic(topics.LOCAL_EVENTS)
@@ -270,31 +269,6 @@ class Node:
                         self.api.unpause(result.won_clock)
 
 
-_THUNDERBOLT_BRIDGE_IFACE = "bridge0"
-_THUNDERBOLT_AUTO_PORT = 50001
-
-
-def _detect_thunderbolt_bridge_ip() -> str | None:
-    """Return the IPv4 address of the Thunderbolt Bridge (bridge0) if the interface is up
-    and has at least one peer connected (i.e. the cable is plugged in)."""
-    import socket
-
-    import psutil
-
-    stats = psutil.net_if_stats()
-    addrs = psutil.net_if_addrs()
-
-    iface_stats = stats.get(_THUNDERBOLT_BRIDGE_IFACE)
-    iface_addrs = addrs.get(_THUNDERBOLT_BRIDGE_IFACE)
-    if iface_stats is None or iface_addrs is None or not iface_stats.isup:
-        return None
-
-    for addr in iface_addrs:
-        if addr.family == socket.AF_INET and not addr.address.startswith("127."):
-            return addr.address
-    return None
-
-
 def main():
     # Exit early if no PID file (not compatible with double-for daemonization yet)
     try:
@@ -320,9 +294,6 @@ def main():
     logger.info(f"Starting EXO | pid={os.getpid()}")
     logger.info(f"{'=' * 40}")
     logger.info(f"EXO_LIBP2P_NAMESPACE: {os.getenv('EXO_LIBP2P_NAMESPACE')}")
-
-    if args.listen_address:
-        logger.info(f"Binding libp2p to {args.listen_address}:{args.libp2p_port} (Thunderbolt Bridge auto-detected)")
 
     if args.offline:
         logger.info("Running in OFFLINE mode — no internet checks, local models only")
@@ -370,7 +341,6 @@ class Args(FrozenModel):
     no_stdio: bool = False
     bootstrap_peers: list[str] = []
     libp2p_port: int
-    listen_address: str | None = None
 
     @classmethod
     def parse(cls) -> Self:
@@ -449,13 +419,6 @@ class Args(FrozenModel):
             dest="libp2p_port",
             help="Fixed TCP port for libp2p to listen on (0 = OS-assigned).",
         )
-        parser.add_argument(
-            "--listen-address",
-            type=str,
-            default=os.getenv("EXO_LISTEN_ADDRESS") or None,
-            dest="listen_address",
-            help="IPv4 address for libp2p to bind to (env: EXO_LISTEN_ADDRESS). Defaults to all interfaces. Set to your Thunderbolt Bridge IP to route traffic through a direct cable connection.",
-        )
         fast_synch_group = parser.add_mutually_exclusive_group()
         fast_synch_group.add_argument(
             "--fast-synch",
@@ -471,15 +434,5 @@ class Args(FrozenModel):
             help="Force MLX FAST_SYNCH off",
         )
 
-        raw = vars(parser.parse_args())
-
-        # Auto-detect Thunderbolt Bridge — bind to it when no explicit listen address is given.
-        if not raw.get("listen_address"):
-            tb_ip = _detect_thunderbolt_bridge_ip()
-            if tb_ip is not None:
-                raw["listen_address"] = tb_ip
-                # Use a fixed port so peers can reliably bootstrap to us.
-                if raw.get("libp2p_port", 0) == 0:
-                    raw["libp2p_port"] = _THUNDERBOLT_AUTO_PORT
-
-        return cls(**raw)  # pyright: ignore[reportAny] - We are intentionally validating here, we can't do it statically
+        args = parser.parse_args()
+        return cls(**vars(args))  # pyright: ignore[reportAny] - We are intentionally validating here, we can't do it statically
