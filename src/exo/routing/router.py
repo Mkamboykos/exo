@@ -178,13 +178,6 @@ class Router:
         logger.debug("Shutting down Router")
         self._tg.cancel_tasks()
 
-    async def dial_address(self, multiaddr: str) -> None:
-        """Dial a peer by multiaddr (fire-and-forget; useful for Thunderbolt re-discovery)."""
-        if not hasattr(self._net, "dial_address"):
-            logger.warning("dial_address not available on NetworkingHandle (stale binary?); skipping")
-            return
-        await self._net.dial_address(multiaddr)
-
     async def _networking_subscribe(self, topic: str):
         await self._net.gossipsub_subscribe(topic)
         logger.info(f"Subscribed to {topic}")

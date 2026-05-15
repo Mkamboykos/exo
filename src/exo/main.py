@@ -166,7 +166,6 @@ class Node:
             if self.api:
                 tg.start_soon(self.api.run)
             tg.start_soon(self._elect_loop)
-            tg.start_soon(self._periodic_arp_redial)
 
     def shutdown(self):
         # if this is our second call to shutdown, just sys.exit
@@ -175,28 +174,6 @@ class Node:
 
             sys.exit(1)
         self._tg.cancel_tasks()
-
-    async def _periodic_arp_redial(self) -> None:
-        """Periodically re-check ARP for Thunderbolt peers and dial any newly discovered ones.
-
-        Runs every 15 seconds. Dials each discovered peer address unconditionally — the Rust
-        swarm silently ignores errors for already-connected peers, so this is safe to repeat.
-        This fixes the one-way discovery problem where the master starts before the peer's
-        Thunderbolt IP is in the ARP table.
-        """
-        dialed: set[str] = set()
-        while True:
-            await anyio.sleep(15)
-            local_ip = _detect_thunderbolt_bridge_ip()
-            if local_ip is None:
-                continue
-            peer_ips = _detect_thunderbolt_peer_ips(local_ip)
-            for ip in peer_ips:
-                addr = f"/ip4/{ip}/tcp/{_THUNDERBOLT_AUTO_PORT}"
-                if addr not in dialed:
-                    logger.info(f"Thunderbolt ARP re-check: dialing peer at {addr}")
-                    dialed.add(addr)
-                await self.router.dial_address(addr)
 
     async def _elect_loop(self):
         with self.election_result_receiver as results:
