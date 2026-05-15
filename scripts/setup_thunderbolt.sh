@@ -35,62 +35,15 @@ else
   PEER_IP="$MAC_A_IP"
 fi
 
-# --- 1. Find the active Thunderbolt interface ---
-# macOS creates bridge0 to bridge en1/en2/en3, but IP routing through bridge0
-# has a kernel bug (sendto → EHOSTUNREACH despite valid ARP). Assigning the IP
-# directly to the active Thunderbolt interface (en1/en2/en3) sidesteps this.
-echo "→ Detecting active Thunderbolt interface ..."
-TB_IFACE=""
-for member in $(ifconfig bridge0 2>/dev/null | awk '/member:/{print $2}'); do
-  if ifconfig "$member" 2>/dev/null | grep -q "status: active"; then
-    TB_IFACE="$member"
-    break
-  fi
-done
-# Fallback: check common names directly if bridge0 has no members yet
-if [[ -z "$TB_IFACE" ]]; then
-  for iface in en1 en2 en3; do
-    if ifconfig "$iface" 2>/dev/null | grep -q "status: active"; then
-      TB_IFACE="$iface"
-      break
-    fi
-  done
-fi
-if [[ -z "$TB_IFACE" ]]; then
-  echo "  ✗ No active Thunderbolt interface found. Is the cable connected?"
-  echo "    Falling back to bridge0."
-  TB_IFACE="bridge0"
-fi
-echo "  → Using interface: ${TB_IFACE}"
+# --- 1. Assign static IP to bridge0 ---
+echo "→ Assigning ${MY_IP} to bridge0 ..."
+sudo ifconfig bridge0 "${MY_IP}" netmask "${NETMASK}" up
 
-# --- 2. Clean up bridge0 to prevent routing conflicts ---
-if [[ "$TB_IFACE" != "bridge0" ]]; then
-  # Remove the interface from bridge0 so it becomes a simple point-to-point link.
-  if ifconfig bridge0 2>/dev/null | grep -q "member: ${TB_IFACE}"; then
-    echo "→ Removing ${TB_IFACE} from bridge0 (avoids bridge routing conflicts) ..."
-    sudo ifconfig bridge0 deletem "${TB_IFACE}" 2>/dev/null || true
-  fi
-  # Remove any stale 10.100.x.x alias from bridge0 that would conflict.
-  for alias_ip in "${MAC_A_IP}" "${MAC_B_IP}"; do
-    if ifconfig bridge0 2>/dev/null | grep -q "inet ${alias_ip}"; then
-      sudo ifconfig bridge0 -alias "${alias_ip}" 2>/dev/null || true
-    fi
-  done
-fi
+# --- 2. Verify the interface is up ---
+echo "→ bridge0 status:"
+ifconfig bridge0 | grep -E "inet |status"
 
-# --- 3. Assign static IP to the Thunderbolt interface ---
-echo "→ Assigning ${MY_IP} to ${TB_IFACE} ..."
-sudo ifconfig "${TB_IFACE}" "${MY_IP}" netmask "${NETMASK}" up
-
-# --- 4. Flush stale ARP/route entries for the peer ---
-sudo route delete -host "${PEER_IP}" 2>/dev/null || true
-sudo arp -d "${PEER_IP}" 2>/dev/null || true
-
-# --- 5. Verify the interface is up ---
-echo "→ ${TB_IFACE} status:"
-ifconfig "${TB_IFACE}" | grep -E "inet |status"
-
-# --- 6. Test reachability (optional, non-fatal) ---
+# --- 3. Test reachability (optional, non-fatal) ---
 echo "→ Pinging peer ${PEER_IP} (3 packets) ..."
 if ping -c 3 -t 3 "${PEER_IP}" &>/dev/null; then
   echo "  ✓ Peer is reachable at ${PEER_IP}"

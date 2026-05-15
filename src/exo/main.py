@@ -5,7 +5,7 @@ import resource
 import signal
 import sys
 from dataclasses import dataclass, field
-from typing import Final, Self
+from typing import Self
 
 import anyio
 from loguru import logger
@@ -270,12 +270,7 @@ class Node:
                         self.api.unpause(result.won_clock)
 
 
-# Ordered list of interfaces to check for a static Thunderbolt IP.
-# setup_thunderbolt.sh assigns the IP to the active Thunderbolt port (en1/en2/en3)
-# directly rather than to bridge0, which has an IP routing bug on macOS
-# (sendto returns EHOSTUNREACH despite valid ARP). bridge0 is kept first for
-# backwards compatibility with users who assigned the IP there manually.
-_THUNDERBOLT_IFACE_CANDIDATES: Final[list[str]] = ["bridge0", "en1", "en2", "en3"]
+_THUNDERBOLT_BRIDGE_IFACE = "bridge0"
 _THUNDERBOLT_AUTO_PORT = 50001
 
 
@@ -284,16 +279,19 @@ def _is_link_local(ip: str) -> bool:
     return ip.startswith("169.254.")
 
 
-def _detect_thunderbolt_iface_and_ip() -> tuple[str, str] | None:
-    """Return (iface, ip) for the first Thunderbolt interface that has a static IPv4 address.
+def _detect_thunderbolt_bridge_ip() -> str | None:
+    """Return the static IPv4 address of the Thunderbolt Bridge (bridge0) if the interface is up.
 
-    Checks bridge0 then en1/en2/en3. setup_thunderbolt.sh assigns the IP directly
-    to the active Thunderbolt port (en1/en2/en3) because bridge0 has an IP routing
-    bug on macOS where sendto() returns EHOSTUNREACH despite a valid ARP entry.
-    bridge0 is still checked first for backwards compatibility.
+    Only returns static (non-link-local) addresses. macOS self-assigns link-local
+    addresses (169.254.x.x / RFC 3927 IPv4LL) to bridge0 when a Thunderbolt cable is
+    connected and no DHCP server is present, but those addresses are unreliable for
+    libp2p dialing: multiple interfaces (WiFi, Thunderbolt, etc.) share the same
+    169.254.0.0/16 subnet, so macOS routes outbound connections through whichever
+    interface wins the routing table race, usually NOT bridge0. Use
+    ./scripts/setup_thunderbolt.sh to assign a static IP in a dedicated subnet
+    (10.100.0.0/24) that only exists on bridge0, making routing unambiguous.
 
-    Only returns static (non-link-local) addresses.
-    Returns None if no candidate interface has a static IPv4 address.
+    Returns None if the interface does not exist, is down, or has no static IPv4 address.
     """
     import socket
 
@@ -302,21 +300,15 @@ def _detect_thunderbolt_iface_and_ip() -> tuple[str, str] | None:
     stats = psutil.net_if_stats()
     addrs = psutil.net_if_addrs()
 
-    for iface in _THUNDERBOLT_IFACE_CANDIDATES:
-        iface_stats = stats.get(iface)
-        iface_addrs = addrs.get(iface)
-        if iface_stats is None or iface_addrs is None or not iface_stats.isup:
-            continue
-        for addr in iface_addrs:
-            if addr.family == socket.AF_INET and not addr.address.startswith("127.") and not _is_link_local(addr.address):
-                return iface, addr.address
+    iface_stats = stats.get(_THUNDERBOLT_BRIDGE_IFACE)
+    iface_addrs = addrs.get(_THUNDERBOLT_BRIDGE_IFACE)
+    if iface_stats is None or iface_addrs is None or not iface_stats.isup:
+        return None
+
+    for addr in iface_addrs:
+        if addr.family == socket.AF_INET and not addr.address.startswith("127.") and not _is_link_local(addr.address):
+            return addr.address
     return None
-
-
-def _detect_thunderbolt_bridge_ip() -> str | None:
-    """Return the static IPv4 address of the active Thunderbolt interface, or None."""
-    result = _detect_thunderbolt_iface_and_ip()
-    return result[1] if result is not None else None
 
 
 def _is_multicast(ip: str) -> bool:
@@ -328,7 +320,7 @@ def _is_multicast(ip: str) -> bool:
 
 
 def _detect_thunderbolt_peer_ips(local_ip: str) -> list[str]:
-    """Return IPv4 addresses of peers discovered via ARP on the active Thunderbolt interface.
+    """Return IPv4 addresses of peers discovered via ARP on the Thunderbolt Bridge (bridge0).
 
     Filters out the local interface IP, multicast addresses (224-239.x.x.x),
     broadcast addresses (x.x.x.255), and link-local addresses (169.254.x.x).
@@ -336,12 +328,9 @@ def _detect_thunderbolt_peer_ips(local_ip: str) -> list[str]:
     import re
     import subprocess
 
-    tb = _detect_thunderbolt_iface_and_ip()
-    iface = tb[0] if tb is not None else "bridge0"
-
     try:
         result = subprocess.run(
-            ["arp", "-a", "-i", iface],
+            ["arp", "-a", "-i", _THUNDERBOLT_BRIDGE_IFACE],
             capture_output=True,
             text=True,
             timeout=2,
@@ -572,9 +561,9 @@ class Args(FrozenModel):
                         ]
             elif raw.get("tb_only"):
                 parser.error(
-                    f"--tb-only specified but no Thunderbolt interface ({', '.join(_THUNDERBOLT_IFACE_CANDIDATES)}) "
-                    "was detected with a static IP. Ensure a Thunderbolt cable is connected and "
-                    "that the interface has an IP address (run ./scripts/setup_thunderbolt.sh if needed)."
+                    f"--tb-only specified but no Thunderbolt Bridge ({_THUNDERBOLT_BRIDGE_IFACE}) "
+                    "was detected. Ensure a Thunderbolt cable is connected and that the bridge "
+                    "interface has an IP address (run ./scripts/setup_thunderbolt.sh if needed)."
                 )
 
         return cls(**raw)  # pyright: ignore[reportAny] - We are intentionally validating here, we can't do it statically
