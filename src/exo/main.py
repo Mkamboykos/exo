@@ -372,11 +372,6 @@ def _detect_thunderbolt_peer_ips(local_ip: str) -> list[str]:
     except (OSError, subprocess.TimeoutExpired):
         return []
 
-    # Only consider peers in the same /24 subnet as the local Thunderbolt IP.
-    # arp -a -i <iface> on macOS can return stale entries from other subnets
-    # (e.g. WiFi addresses), so we restrict to the Thunderbolt subnet.
-    local_prefix = ".".join(local_ip.split(".")[:3]) + "."
-
     # Each line: hostname (1.2.3.4) at aa:bb:cc:dd:ee:ff on bridge0 [ethernet]
     peers: list[str] = []
     for line in result.stdout.splitlines():
@@ -385,7 +380,6 @@ def _detect_thunderbolt_peer_ips(local_ip: str) -> list[str]:
             ip = match.group(1)
             if (
                 ip != local_ip
-                and ip.startswith(local_prefix)
                 and not _is_multicast(ip)
                 and not ip.endswith(".255")
                 and not _is_link_local(ip)
