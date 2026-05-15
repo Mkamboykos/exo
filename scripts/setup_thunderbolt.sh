@@ -24,7 +24,7 @@ usage() {
 }
 
 [[ $# -ne 1 ]] && usage
-ROLE="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+ROLE="${1,,}"
 [[ "$ROLE" != "a" && "$ROLE" != "b" ]] && usage
 
 if [[ "$ROLE" == "a" ]]; then
@@ -54,18 +54,21 @@ fi
 # --- 4. Print the exo command to run ---
 echo ""
 echo "============================================================"
-echo "  Setup complete."
-echo ""
-echo "  Run on this machine:"
-echo "    uv run exo"
+echo "  Setup complete. Run exo with these flags:"
 echo ""
 if [[ "$ROLE" == "a" ]]; then
-  echo "  Run on Mac B (after running setup_thunderbolt.sh b there):"
-  echo "    uv run exo"
+  echo "  Mac A (this machine):"
+  echo "    uv run exo --listen-address ${MY_IP} --libp2p-port ${EXO_PORT}"
+  echo ""
+  echo "  Mac B (other machine — after running setup_thunderbolt.sh b):"
+  echo "    uv run exo --listen-address ${PEER_IP} --libp2p-port ${EXO_PORT} \\"
+  echo "               --bootstrap-peers /ip4/${MY_IP}/tcp/${EXO_PORT}"
 else
-  echo "  Run on Mac A (after running setup_thunderbolt.sh a there):"
-  echo "    uv run exo"
+  echo "  Mac A bootstrap command to give to Mac A:"
+  echo "    uv run exo --listen-address ${PEER_IP} --libp2p-port ${EXO_PORT}"
+  echo ""
+  echo "  Mac B (this machine):"
+  echo "    uv run exo --listen-address ${MY_IP} --libp2p-port ${EXO_PORT} \\"
+  echo "               --bootstrap-peers /ip4/${PEER_IP}/tcp/${EXO_PORT}"
 fi
-echo ""
-echo "  exo auto-detects the bridge IP and the peer — no extra flags needed."
 echo "============================================================"
