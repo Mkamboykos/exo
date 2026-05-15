@@ -280,18 +280,12 @@ def _is_link_local(ip: str) -> bool:
 
 
 def _detect_thunderbolt_bridge_ip() -> str | None:
-    """Return the static IPv4 address of the Thunderbolt Bridge (bridge0) if the interface is up.
+    """Return the IPv4 address of the Thunderbolt Bridge (bridge0) if the interface is up.
 
-    Only returns static (non-link-local) addresses. macOS self-assigns link-local
-    addresses (169.254.x.x / RFC 3927 IPv4LL) to bridge0 when a Thunderbolt cable is
-    connected and no DHCP server is present, but those addresses are unreliable for
-    libp2p dialing: multiple interfaces (WiFi, Thunderbolt, etc.) share the same
-    169.254.0.0/16 subnet, so macOS routes outbound connections through whichever
-    interface wins the routing table race, usually NOT bridge0. Use
-    ./scripts/setup_thunderbolt.sh to assign a static IP in a dedicated subnet
-    (10.100.0.0/24) that only exists on bridge0, making routing unambiguous.
-
-    Returns None if the interface does not exist, is down, or has no static IPv4 address.
+    Accepts both static IPs and macOS self-assigned link-local addresses (169.254.x.x),
+    which macOS assigns automatically when a Thunderbolt cable is connected and no DHCP
+    server is present (RFC 3927 IPv4LL). Returns None if the interface does not exist,
+    is down, or has no usable IPv4 address yet.
     """
     import socket
 
@@ -306,7 +300,7 @@ def _detect_thunderbolt_bridge_ip() -> str | None:
         return None
 
     for addr in iface_addrs:
-        if addr.family == socket.AF_INET and not addr.address.startswith("127.") and not _is_link_local(addr.address):
+        if addr.family == socket.AF_INET and not addr.address.startswith("127."):
             return addr.address
     return None
 
@@ -365,12 +359,17 @@ def main():
     logger.info(f"EXO_LIBP2P_NAMESPACE: {os.getenv('EXO_LIBP2P_NAMESPACE')}")
 
     if args.listen_address:
+        ip_kind = "link-local" if _is_link_local(args.listen_address) else "static"
         logger.info(
             f"Binding libp2p to {args.listen_address}:{args.libp2p_port} "
-            f"(Thunderbolt Bridge auto-detected)"
+            f"(Thunderbolt Bridge auto-detected, {ip_kind} IP)"
         )
         if args.bootstrap_peers:
             logger.info(f"Thunderbolt peers auto-discovered via ARP: {args.bootstrap_peers}")
+        elif _is_link_local(args.listen_address):
+            logger.info(
+                "No ARP peers found yet — mDNS discovery will connect peers once both nodes are running."
+            )
 
     if args.offline:
         logger.info("Running in OFFLINE mode — no internet checks, local models only")
