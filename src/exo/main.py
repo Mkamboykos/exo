@@ -293,10 +293,12 @@ class Node:
                         self.api.unpause(result.won_clock)
 
 
-# Fallback ordered list of interfaces to check when networksetup detection fails.
-# bridge0 is first for backwards compatibility; en1-en5 cover Thunderbolt ports
-# on different Mac models (interface numbers vary by model/macOS version).
-_THUNDERBOLT_IFACE_CANDIDATES: Final[list[str]] = ["bridge0", "en1", "en2", "en3", "en4", "en5"]
+# Ordered list of interfaces to check for a static Thunderbolt IP.
+# setup_thunderbolt.sh assigns the IP to the active Thunderbolt port (en1/en2/en3)
+# directly rather than to bridge0, which has an IP routing bug on macOS
+# (sendto returns EHOSTUNREACH despite valid ARP). bridge0 is kept first for
+# backwards compatibility with users who assigned the IP there manually.
+_THUNDERBOLT_IFACE_CANDIDATES: Final[list[str]] = ["bridge0", "en1", "en2", "en3"]
 _THUNDERBOLT_AUTO_PORT = 50001
 
 
@@ -305,46 +307,13 @@ def _is_link_local(ip: str) -> bool:
     return ip.startswith("169.254.")
 
 
-def _networksetup_thunderbolt_ifaces() -> list[str]:
-    """Return interface names whose hardware port contains 'Thunderbolt', via networksetup.
-
-    This is the reliable way to distinguish Thunderbolt from WiFi/Ethernet on macOS
-    when both share the same en* naming scheme.
-    Returns an empty list if networksetup is unavailable or returns no results.
-    """
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            ["networksetup", "-listallhardwareports"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-
-    ifaces: list[str] = []
-    current_port = ""
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("Hardware Port:"):
-            current_port = line[len("Hardware Port:"):].strip()
-        elif line.startswith("Device:") and "Thunderbolt" in current_port:
-            device = line[len("Device:"):].strip()
-            if device:
-                ifaces.append(device)
-    return ifaces
-
-
 def _detect_thunderbolt_iface_and_ip() -> tuple[str, str] | None:
     """Return (iface, ip) for the first Thunderbolt interface that has a static IPv4 address.
 
-    Detection order:
-    1. Interfaces identified as Thunderbolt by ``networksetup -listallhardwareports``.
-       This correctly excludes WiFi interfaces even when they share en* numbering.
-    2. bridge0 (backwards compatibility for manually-configured setups).
-    3. en1–en5 fallback (for environments where networksetup is unavailable).
+    Checks bridge0 then en1/en2/en3. setup_thunderbolt.sh assigns the IP directly
+    to the active Thunderbolt port (en1/en2/en3) because bridge0 has an IP routing
+    bug on macOS where sendto() returns EHOSTUNREACH despite a valid ARP entry.
+    bridge0 is still checked first for backwards compatibility.
 
     Only returns static (non-link-local) addresses.
     Returns None if no candidate interface has a static IPv4 address.
@@ -356,11 +325,7 @@ def _detect_thunderbolt_iface_and_ip() -> tuple[str, str] | None:
     stats = psutil.net_if_stats()
     addrs = psutil.net_if_addrs()
 
-    # networksetup-identified Thunderbolt interfaces come first; then legacy candidates
-    tb_ifaces = _networksetup_thunderbolt_ifaces()
-    candidates = tb_ifaces + [c for c in _THUNDERBOLT_IFACE_CANDIDATES if c not in tb_ifaces]
-
-    for iface in candidates:
+    for iface in _THUNDERBOLT_IFACE_CANDIDATES:
         iface_stats = stats.get(iface)
         iface_addrs = addrs.get(iface)
         if iface_stats is None or iface_addrs is None or not iface_stats.isup:
